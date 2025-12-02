@@ -116,18 +116,77 @@ def parse_wod(html):
         if not rest_day and workout_content and len(workout_content.strip()) < 50:
             rest_day = any(word in workout_content.lower() for word in ["rest", "recovery", "off"])
         
-        # Look for scaled/beginner versions
+        # Look for scaled/beginner versions - target official CrossFit scaling sections
         scaled_content = ""
-        scaled_patterns = ["scaled", "beginner", "intermediate", "modified", "scaling", "substitute"]
+        scaling_sections = []
         
-        # Search for scaled workout content
-        for element in soup.find_all(['p', 'div', 'section', 'li']):
-            text = element.get_text(strip=True)
-            if any(pattern.lower() in text.lower() for pattern in scaled_patterns):
-                # Check if this looks like actual workout content (not just navigation/headers)
-                if any(workout_word in text.lower() for workout_word in ["rounds", "reps", "time", "weight", "distance", "substitute", "modify"]):
-                    if len(text) > 20:  # Avoid short headers
-                        scaled_content += f"\n{text}"
+        # Look for official intermediate and beginner options
+        for option_type in ['intermediate option:', 'beginner option:']:
+            option_element = soup.find(string=lambda text: text and option_type in text.lower())
+            if option_element:
+                # Collect the workout details that follow
+                workout_parts = [option_type.title().replace(':', '')]
+                current = option_element.parent
+                
+                # Look through subsequent elements to build the complete workout
+                for _ in range(15):  # Check more elements
+                    if current and current.next_sibling:
+                        current = current.next_sibling
+                        if hasattr(current, 'get_text'):
+                            text = current.get_text(strip=True)
+                            if text:
+                                # Stop at comments, coaching, or next option
+                                if any(stop in text.lower() for stop in ['comment', 'coaching', 'resources', 'post time', 'beginner option', 'intermediate option']):
+                                    break
+                                    
+                                # Add workout content - be more permissive with numbers and exercise names
+                                if any(word in text.lower() for word in ['for time:', 'amrap', 'pull-ups', 'push-ups', 'squats', 'sit-ups', 'ring rows', 'knee']) or text.isdigit():
+                                    workout_parts.append(text)
+                
+                if len(workout_parts) > 1:
+                    # Format the workout nicely
+                    formatted_workout = []
+                    current_exercise = ""
+                    
+                    for part in workout_parts[1:]:  # Skip the title
+                        if part.isdigit():
+                            current_exercise = part + " "
+                        elif current_exercise and any(ex in part.lower() for ex in ['pull-ups', 'push-ups', 'squats', 'sit-ups', 'ring rows']):
+                            formatted_workout.append(current_exercise + part)
+                            current_exercise = ""
+                        else:
+                            formatted_workout.append(part)
+                    
+                    if formatted_workout:
+                        scaling_sections.append(workout_parts[0] + ":\n" + "\n".join(formatted_workout))
+        
+        # Also look for general scaling guidance
+        scaling_element = soup.find(string=lambda text: text and text.strip().lower() == 'scaling:')
+        if scaling_element:
+            current = scaling_element.parent
+            scaling_guidance = []
+            
+            # Collect scaling guidance
+            for _ in range(8):
+                if current and current.next_sibling:
+                    current = current.next_sibling
+                    if hasattr(current, 'get_text'):
+                        text = current.get_text(strip=True)
+                        if text and len(text) > 20:
+                            # Stop at options
+                            if 'option:' in text.lower():
+                                break
+                            if any(word in text.lower() for word in ['reduce', 'jumping', 'knee', 'ring rows', 'modify', 'substitute', 'complexity']):
+                                scaling_guidance.append(text)
+                                if len(scaling_guidance) >= 3:  # Got enough guidance
+                                    break
+            
+            if scaling_guidance:
+                scaling_sections.insert(0, 'Scaling Guidance:\n' + '\n'.join(scaling_guidance))
+        
+        # Format the scaling content
+        if scaling_sections:
+            scaled_content = '\n\n'.join(scaling_sections)
         
         # Format the parsed data with scaled options
         parsed_wod = {
